@@ -1,4 +1,4 @@
-# auditoria_forense_pcap_aprimorado.py
+# auditoria_forense_pcap_completo.py
 import sys
 from scapy.all import rdpcap, IP, TCP, UDP, ICMP, ARP, DNS, Raw, Ether
 from collections import defaultdict, Counter
@@ -28,7 +28,8 @@ credenciais_expostas = []
 ip_dados_enviados = Counter()
 ip_roles = defaultdict(set)
 protocolos_identificados = defaultdict(set)
-ip_mac_map = defaultdict(set)  # IP -> Set[MACs]
+ip_mac_map = defaultdict(set)
+portas_abertas = set()
 
 timestamps = []
 
@@ -64,6 +65,9 @@ for pkt in packets:
         if flags == 0x02:
             scan_suspeitos.add(src)
             ip_roles[src].add("atacante")
+
+        if flags == 0x12:
+            portas_abertas.add(sport)
 
         if pkt.haslayer(Raw):
             payload = pkt[Raw].load
@@ -189,6 +193,10 @@ with open(relatorio_path, "w") as f:
     f.write("\n## 6. Portas mais acessadas\n")
     for porta, count in porta_counter.most_common(10):
         f.write(f"- Porta {porta}: {count} vezes\n")
+
+    f.write("\n## 6.1 Portas possivelmente abertas (SYN-ACK)\n")
+    for porta in sorted(portas_abertas):
+        f.write(f"- Porta {porta}\n")
 
     f.write("\n## 7. User-Agents incomuns detectados\n")
     for agent, count in user_agents.most_common():
