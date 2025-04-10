@@ -26,16 +26,103 @@ def parse_packet_from_file(file_path):
     hex_clean = re.sub(r'[^0-9a-fA-F]', '', hex_input)
     raw_bytes = bytes.fromhex(hex_clean)
 
-    if len(raw_bytes) < 54:
+    if len(raw_bytes) < 20:
         print("Pacote muito curto para análise completa.")
         return
 
-    ip_header = raw_bytes[14:34]
+    # Detectar dinamicamente onde começa o cabeçalho IP (versão 4 ou 6)
+        ip_offset = None
+    for i in range(min(32, len(raw_bytes))):
+        if raw_bytes[i] >> 4 in (4, 6):
+            ip_offset = i
+            break
+
+    if ip_offset is None:
+        print("[!] Não foi possível detectar início do cabeçalho IP corretamente.")
+        return
+
+    ip_header = raw_bytes[ip_offset:ip_offset + 20]
     iph = struct.unpack('!BBHHHBBH4s4s', ip_header)
+    version_ihl = iph[0]
+    version = version_ihl >> 4
+    ihl = version_ihl & 0xF
+    tos = iph[1]
+    total_length = iph[2]
+    identification = iph[3]
+    flags_fragment = iph[4]
+    ttl = iph[5]
+    protocol = iph[6]
+    checksum = iph[7]
     src_ip = socket.inet_ntoa(iph[8])
     dst_ip = socket.inet_ntoa(iph[9])
 
-    tcp_header = raw_bytes[34:54]
+    print("========= Pacote IP ============")
+    print(f"Versão                : {version}")
+    print(f"Header Length         : {ihl * 4} bytes")
+    print(f"Tipo de Serviço (ToS) : {tos}")
+    print(f"Total Length          : {total_length}")
+    print(f"Identificação         : {identification}")
+    print(f"Flags/Fragment Offset : {flags_fragment:#06x}")
+    print(f"TTL                   : {ttl}")
+    print(f"Protocolo             : {protocol} ({'TCP' if protocol == 6 else 'UDP' if protocol == 17 else 'ICMP' if protocol == 1 else 'ICMPv6' if protocol == 58 else 'Desconhecido'})")
+    print(f"Checksum              : {checksum:#06x}")
+    print(f"IP de Origem          : {src_ip}")
+    print(f"IP de Destino         : {dst_ip}")
+    print("===============================\n")
+
+    if protocol == 1 or protocol == 58:  # ICMP ou ICMPv6
+        icmp_offset = ip_offset + ihl * 4
+        if len(raw_bytes) >= icmp_offset + 4:
+            icmp_header = struct.unpack('!BBH', raw_bytes[icmp_offset:icmp_offset + 4])
+            icmp_type = icmp_header[0]
+            icmp_code = icmp_header[1]
+            icmp_checksum = icmp_header[2]
+
+            print("== Cabeçalho ICMP ==")
+            print(f"Tipo      : {icmp_type}")
+            print(f"Código    : {icmp_code}")
+            print(f"Checksum  : {icmp_checksum:#06x}")
+        else:
+            print("[!] Cabeçalho ICMP incompleto.")
+
+        payload_start = ip_offset + (ihl * 4)
+        if len(raw_bytes) > payload_start:
+            payload = raw_bytes[payload_start:]
+            try:
+                text = payload.decode('utf-8', errors='ignore')
+                print("Payload (UTF-8)    :")
+                print("----------------------")
+                print(text.strip() if text.strip() else "[Payload vazio ou não imprimível]")
+                print("----------------------")
+            except Exception as e:
+                print(f"Erro ao decodificar payload: {e}")
+        else:
+            print("Payload            : Nenhum payload detectado")
+        return
+
+    if protocol != 6:
+        print("[!] Protocolo não é TCP. Análise do cabeçalho TCP ignorada.")
+
+        payload_start = ip_offset + (ihl * 4)
+        if len(raw_bytes) > payload_start:
+            payload = raw_bytes[payload_start:]
+            try:
+                text = payload.decode('utf-8', errors='ignore')
+                print("Payload (UTF-8)    :")
+                print("----------------------")
+                print(text.strip() if text.strip() else "[Payload vazio ou não imprimível]")
+                print("----------------------")
+            except Exception as e:
+                print(f"Erro ao decodificar payload: {e}")
+        else:
+            print("Payload            : Nenhum payload detectado")
+        return
+
+    if len(raw_bytes) < ip_offset + 20 + 20:
+        print("Pacote muito curto para análise TCP.")
+        return
+
+    tcp_header = raw_bytes[ip_offset + 20:ip_offset + 40]
     tcph = struct.unpack('!HHLLBBHHH', tcp_header)
     src_port = tcph[0]
     dst_port = tcph[1]
@@ -43,15 +130,12 @@ def parse_packet_from_file(file_path):
 
     flags = decode_tcp_flags(flags_byte)
 
-    print("== Análise do Pacote ==")
-    print(f"IP de origem      : {src_ip}")
+    print("== Análise do Cabeçalho TCP ==")
     print(f"Porta de origem   : {src_port}")
-    print(f"IP de destino     : {dst_ip}")
     print(f"Porta de destino  : {dst_port}")
     print(f"Flags TCP ativas  : {', '.join(flags) if flags else 'Nenhuma'}")
 
-    # Verifica se há payload HTTP
-    payload_start = 54
+    payload_start = ip_offset + (ihl * 4) + ((tcph[4] >> 4) * 4)
     if len(raw_bytes) > payload_start:
         payload = raw_bytes[payload_start:]
         try:
@@ -76,7 +160,6 @@ def parse_packet_from_file(file_path):
             print(text.strip() if text.strip() else "[Payload vazio ou não imprimível]")
             print("----------------------")
 
-            # Decodifica campos username e password se existirem
             creds_match = re.search(r'username=([^&]+)&password=([^&\s]+)', text)
             if creds_match:
                 raw_user = creds_match.group(1)
