@@ -8,6 +8,7 @@ import argparse
 import markdown
 import pdfkit
 import os
+import re
 import sys
 
 CSS_PADRAO = """
@@ -40,7 +41,23 @@ th, td {
   border: 1px solid #ddd;
   padding: 8px;
 }
+img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1rem auto;
+}
 """
+
+
+def corrigir_caminhos_de_imagem(html, base_dir):
+    """Substitui caminhos relativos de imagem por caminhos absolutos"""
+    def substitui(match):
+        caminho_rel = match.group(1)
+        caminho_abs = os.path.abspath(os.path.join(base_dir, caminho_rel))
+        return f'src="{caminho_abs}"'
+
+    return re.sub(r'src="(.+?)"', substitui, html)
 
 def md_para_pdf(md_path, pdf_path):
     if not os.path.exists(md_path):
@@ -51,10 +68,18 @@ def md_para_pdf(md_path, pdf_path):
         md_content = f.read()
         html_body = markdown.markdown(md_content, extensions=["fenced_code", "codehilite", "tables"])
 
-    html_template = "<html><head><meta charset='utf-8'><style>{}</style></head><body>{}</body></html>".format(
-        CSS_PADRAO, html_body)
+    # Corrige caminhos de imagem
+    html_body_corrigido = corrigir_caminhos_de_imagem(html_body, os.path.dirname(md_path))
 
-    pdfkit.from_string(html_template, pdf_path)
+    html_template = "<html><head><meta charset='utf-8'><style>{}</style></head><body>{}</body></html>".format(
+        CSS_PADRAO, html_body_corrigido)
+
+    options = {
+        'enable-local-file-access': '',
+        'quiet': '',
+    }
+
+    pdfkit.from_string(html_template, pdf_path, options=options)
     print(f"[✔] PDF gerado com sucesso: {pdf_path}")
 
 if __name__ == "__main__":
